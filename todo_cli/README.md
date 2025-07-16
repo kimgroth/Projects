@@ -11,11 +11,26 @@ Run the application using Python:
 python todo.py
 ```
 
+Alternatively, use the interactive TUI:
+
+```bash
+python todo_tui.py
+```
+
 Then use the following commands:
 
 - `add <task description>` – add a new task.
 - `list` or `view` – display current tasks.
 - `done <task id>` – mark a task as done.
 - `exit` – quit the program.
+
+### TUI controls
+- Navigate with arrow keys.
+- `e` to edit the selected task.
+- `c` to toggle completion.
+- `a` to add below.
+- `A` to add above.
+- `w` to move up.
+- `s` to move down.
 
 Tasks are stored only in memory, so they disappear when you exit the program.
