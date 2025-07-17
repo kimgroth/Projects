@@ -1,7 +1,34 @@
+import json
+from pathlib import Path
+
+
 class TodoCLI:
     def __init__(self):
+        self.todo_file = Path.home() / "Documents" / "todos.json"
         self.tasks = []
         self.next_id = 1
+        self.load_tasks()
+
+    def load_tasks(self):
+        if self.todo_file.exists():
+            try:
+                with self.todo_file.open('r') as f:
+                    self.tasks = json.load(f)
+            except Exception as e:
+                print(f"Failed to load tasks: {e}")
+                self.tasks = []
+        if self.tasks:
+            self.next_id = max(t['id'] for t in self.tasks) + 1
+        else:
+            self.next_id = 1
+
+    def save_tasks(self):
+        self.todo_file.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with self.todo_file.open('w') as f:
+                json.dump(self.tasks, f, indent=2)
+        except Exception as e:
+            print(f"Failed to save tasks: {e}")
 
     def run(self):
         print("Simple To-Do CLI. Type 'help' for commands.")
@@ -10,6 +37,7 @@ class TodoCLI:
                 command = input('> ').strip()
             except (EOFError, KeyboardInterrupt):
                 print()  # new line
+                self.save_tasks()
                 break
 
             if not command:
@@ -28,6 +56,7 @@ class TodoCLI:
             elif cmd == 'done':
                 self.mark_done(arg)
             elif cmd in ('exit', 'quit', 'q'):
+                self.save_tasks()
                 break
             else:
                 print("Unknown command. Type 'help' for a list of commands.")
@@ -51,6 +80,7 @@ class TodoCLI:
         })
         print(f'Added task {self.next_id}.')
         self.next_id += 1
+        self.save_tasks()
 
     def list_tasks(self):
         if not self.tasks:
@@ -69,6 +99,7 @@ class TodoCLI:
             if task['id'] == tid:
                 task['done'] = True
                 print(f'Task {tid} marked done.')
+                self.save_tasks()
                 return
         print(f'No task with id {tid}.')
 
