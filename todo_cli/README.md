@@ -33,6 +33,7 @@ Then use the following commands:
 - `w` to move up.
 - `s` to move down.
 - `r` to remove the selected task.
+- `z` to toggle indent on the selected task.
 
 Completed tasks are shown greyed out with a strikethrough effect.
 
