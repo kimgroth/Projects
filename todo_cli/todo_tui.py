@@ -1,10 +1,15 @@
+"""Text user interface version of the todo application."""
+
 import curses
 import json
 from pathlib import Path
 from pyfiglet import Figlet
 
 class TodoTUI:
+    """Curses based interface to display and edit todos."""
+
     def __init__(self):
+        """Set up internal state and load tasks from disk."""
         self.todo_file = Path.home() / "Documents" / "todos.json"
         self.tasks = []
         self.next_id = 1
@@ -18,6 +23,8 @@ class TodoTUI:
         self.load_tasks()
 
     def load_tasks(self):
+        """Read tasks from :attr:`todo_file` and compute :attr:`next_id`."""
+
         if self.todo_file.exists():
             try:
                 with self.todo_file.open('r') as f:
@@ -33,6 +40,8 @@ class TodoTUI:
             self.next_id = 1
 
     def save_tasks(self):
+        """Persist the current list of tasks to disk."""
+
         self.todo_file.parent.mkdir(parents=True, exist_ok=True)
         try:
             with self.todo_file.open('w') as f:
@@ -41,9 +50,13 @@ class TodoTUI:
             print(f"Failed to save tasks: {e}")
 
     def run(self):
+        """Launch the TUI using :func:`curses.wrapper`."""
+
         curses.wrapper(self._main)
 
     def _main(self, stdscr):
+        """Main curses event loop handling key input."""
+
         curses.curs_set(0)
         stdscr.nodelay(False)
         while True:
@@ -82,6 +95,8 @@ class TodoTUI:
                 self.save_tasks()
 
     def _draw(self, stdscr):
+        """Render the current list of tasks to ``stdscr``."""
+
         stdscr.clear()
         y = 0
         for line in self.header_lines:
@@ -107,11 +122,15 @@ class TodoTUI:
         stdscr.refresh()
 
     def _move_selection(self, delta):
+        """Move the selection cursor up or down by ``delta``."""
+
         if not self.tasks:
             return
         self.selected = max(0, min(self.selected + delta, len(self.tasks) - 1))
 
     def _toggle_complete(self):
+        """Toggle completion state of the currently selected task."""
+
         if not self.tasks:
             return
         task = self.tasks[self.selected]
@@ -119,6 +138,8 @@ class TodoTUI:
         self.save_tasks()
 
     def _prompt(self, stdscr, prompt):
+        """Display ``prompt`` and return user input."""
+
         curses.echo()
         stdscr.addstr(len(self.tasks) + 3, 0, ' ' * (curses.COLS - 1))
         stdscr.addstr(len(self.tasks) + 3, 0, prompt)
@@ -128,6 +149,8 @@ class TodoTUI:
         return inp
 
     def _add_task(self, stdscr, below=True):
+        """Insert a new task either below or above the current one."""
+
         desc = self._prompt(stdscr, 'New task: ')
         if not desc.strip():
             return
@@ -142,6 +165,8 @@ class TodoTUI:
         self.save_tasks()
 
     def _edit_task(self, stdscr):
+        """Prompt the user to edit the currently selected task."""
+
         if not self.tasks:
             return
         task = self.tasks[self.selected]
@@ -151,6 +176,8 @@ class TodoTUI:
             self.save_tasks()
 
     def _move_task(self, delta):
+        """Swap the selected task ``delta`` positions up or down."""
+
         if not self.tasks:
             return
         idx = self.selected
@@ -162,6 +189,8 @@ class TodoTUI:
         self.save_tasks()
 
     def _delete_task(self):
+        """Remove the currently selected task from the list."""
+
         if not self.tasks:
             return
         del self.tasks[self.selected]
@@ -172,6 +201,8 @@ class TodoTUI:
         self.save_tasks()
 
     def _toggle_indent(self):
+        """Toggle a simple one-level indent on the current task."""
+
         if not self.tasks:
             return
         task = self.tasks[self.selected]
@@ -179,6 +210,8 @@ class TodoTUI:
         self.save_tasks()
 
     def _strike(self, text):
+        """Return *text* with strike-through Unicode combining characters."""
+
         return ''.join(ch + '\u0336' for ch in text)
 
 if __name__ == '__main__':
