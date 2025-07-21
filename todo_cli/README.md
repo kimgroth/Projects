@@ -32,5 +32,8 @@ Then use the following commands:
 - `A` to add above.
 - `w` to move up.
 - `s` to move down.
+- `r` to remove the selected task.
+
+Completed tasks are shown greyed out with a strikethrough effect.
 
 Tasks are stored only in memory, so they disappear when you exit the program.

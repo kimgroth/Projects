@@ -65,6 +65,9 @@ class TodoTUI:
             elif key == ord('s'):
                 self._move_task(1)
                 self.save_tasks()
+            elif key == ord('r'):
+                self._delete_task()
+                self.save_tasks()
 
     def _draw(self, stdscr):
         stdscr.clear()
@@ -73,11 +76,15 @@ class TodoTUI:
             stdscr.addstr(2, 0, "No tasks yet. Press 'a' to add one.")
         for idx, task in enumerate(self.tasks):
             status = '✓' if task['done'] else ' '
-            line = f"[{status}] {task['desc']}"
+            desc = task['desc']
+            attr = 0
+            if task['done']:
+                desc = self._strike(desc)
+                attr |= curses.A_DIM
+            line = f"[{status}] {desc}"
             if idx == self.selected:
-                stdscr.addstr(idx + 2, 0, line, curses.A_REVERSE)
-            else:
-                stdscr.addstr(idx + 2, 0, line)
+                attr |= curses.A_REVERSE
+            stdscr.addstr(idx + 2, 0, line, attr)
         stdscr.refresh()
 
     def _move_selection(self, delta):
@@ -134,6 +141,19 @@ class TodoTUI:
         self.tasks[idx], self.tasks[new_idx] = self.tasks[new_idx], self.tasks[idx]
         self.selected = new_idx
         self.save_tasks()
+
+    def _delete_task(self):
+        if not self.tasks:
+            return
+        del self.tasks[self.selected]
+        if self.selected >= len(self.tasks):
+            self.selected = len(self.tasks) - 1
+        if self.selected < 0:
+            self.selected = 0
+        self.save_tasks()
+
+    def _strike(self, text):
+        return ''.join(ch + '\u0336' for ch in text)
 
 if __name__ == '__main__':
     TodoTUI().run()
