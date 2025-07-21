@@ -1,6 +1,7 @@
 import curses
 import json
 from pathlib import Path
+from pyfiglet import Figlet
 
 class TodoTUI:
     def __init__(self):
@@ -8,6 +9,12 @@ class TodoTUI:
         self.tasks = []
         self.next_id = 1
         self.selected = 0
+        self.figlet = Figlet(font="slant")
+        self.header_lines = self.figlet.renderText("TODOs").splitlines()
+        self.help_lines = [
+            "q: quit | a: add below | A: add above | e: edit | c: toggle complete",
+            "w: move up | s: move down | r: remove | z: indent"
+        ]
         self.load_tasks()
 
     def load_tasks(self):
@@ -18,6 +25,8 @@ class TodoTUI:
             except Exception as e:
                 print(f"Failed to load tasks: {e}")
                 self.tasks = []
+        for t in self.tasks:
+            t.setdefault('indent', 0)
         if self.tasks:
             self.next_id = max(t['id'] for t in self.tasks) + 1
         else:
@@ -68,23 +77,33 @@ class TodoTUI:
             elif key == ord('r'):
                 self._delete_task()
                 self.save_tasks()
+            elif key == ord('z'):
+                self._toggle_indent()
+                self.save_tasks()
 
     def _draw(self, stdscr):
         stdscr.clear()
-        stdscr.addstr(0, 0, "TODOs (q=quit)")
+        y = 0
+        for line in self.header_lines:
+            stdscr.addstr(y, 0, line)
+            y += 1
+        for line in self.help_lines:
+            stdscr.addstr(y, 0, line)
+            y += 1
         if not self.tasks:
-            stdscr.addstr(2, 0, "No tasks yet. Press 'a' to add one.")
+            stdscr.addstr(y, 0, "No tasks yet. Press 'a' to add one.")
         for idx, task in enumerate(self.tasks):
             status = '✓' if task['done'] else ' '
             desc = task['desc']
+            indent = task.get('indent', 0)
             attr = 0
             if task['done']:
                 desc = self._strike(desc)
                 attr |= curses.A_DIM
-            line = f"[{status}] {desc}"
+            line = "  " * indent + f"[{status}] {desc}"
             if idx == self.selected:
                 attr |= curses.A_REVERSE
-            stdscr.addstr(idx + 2, 0, line, attr)
+            stdscr.addstr(idx + y, 0, line, attr)
         stdscr.refresh()
 
     def _move_selection(self, delta):
@@ -112,7 +131,7 @@ class TodoTUI:
         desc = self._prompt(stdscr, 'New task: ')
         if not desc.strip():
             return
-        task = {'id': self.next_id, 'desc': desc, 'done': False}
+        task = {'id': self.next_id, 'desc': desc, 'done': False, 'indent': 0}
         if below or not self.tasks:
             insert_at = self.selected + 1 if self.tasks else 0
         else:
@@ -150,6 +169,13 @@ class TodoTUI:
             self.selected = len(self.tasks) - 1
         if self.selected < 0:
             self.selected = 0
+        self.save_tasks()
+
+    def _toggle_indent(self):
+        if not self.tasks:
+            return
+        task = self.tasks[self.selected]
+        task['indent'] = 0 if task.get('indent', 0) else 1
         self.save_tasks()
 
     def _strike(self, text):
