@@ -2,8 +2,26 @@
 
 import curses
 import json
+import subprocess
+import sys
 from pathlib import Path
-from pyfiglet import Figlet
+
+try:
+    from pyfiglet import Figlet
+except ModuleNotFoundError:
+    print("Installing missing dependency 'pyfiglet'...")
+    subprocess.check_call([
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--user",
+        "pyfiglet",
+    ])
+    import importlib, site
+    importlib.reload(site)
+    site.addsitedir(site.getusersitepackages())
+    from pyfiglet import Figlet
 
 class TodoTUI:
     """Curses based interface to display and edit todos."""
