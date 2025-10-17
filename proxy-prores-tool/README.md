@@ -25,3 +25,8 @@ python3 proxy_proxy.py /path/to/source /path/to/destination
 - Converts each video to ProRes proxy (`.mov`) with max dimension 1024 px while maintaining aspect ratio.
 - Places generated proxies directly in the destination root, naming them `<OriginalName>_Proxy.mov`.
 - Skips files when the destination proxy already exists.
+
+## Requirements
+
+- Python 3.10 or newer
+- `ffmpeg` available on the system `PATH`
