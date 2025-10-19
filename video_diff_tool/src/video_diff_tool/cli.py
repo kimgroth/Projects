@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
+from time import monotonic
 
 import cv2
 import numpy as np
@@ -18,6 +20,19 @@ from .utils import format_timecode
 DEFAULT_THRESHOLD = 0.15
 DEFAULT_MIN_SEGMENT_LENGTH = 6
 DEFAULT_FRAME_STRIDE = 1
+
+
+def _format_duration(seconds: float) -> str:
+    """Format a duration in seconds into H:MM:SS or MM:SS."""
+
+    if not math.isfinite(seconds) or seconds < 0:
+        return "--:--"
+    seconds_int = int(round(seconds))
+    hours, remainder = divmod(seconds_int, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours:d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
@@ -183,6 +198,39 @@ def analyze_videos(
     current_max_diff = -1.0
     current_best_frames: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None
     frame_index = 0
+    start_time = monotonic()
+    last_report_time = start_time
+    progress_reported = False
+
+    def report_progress(current_frame: int, *, final: bool = False) -> None:
+        nonlocal last_report_time, progress_reported
+
+        now = monotonic()
+        if not final and now - last_report_time < 5 and current_frame < total_frames:
+            return
+
+        elapsed = max(now - start_time, 1e-9)
+        processed = max(0, min(current_frame, total_frames if total_frames > 0 else current_frame))
+
+        if total_frames > 0:
+            percent = (processed / total_frames) * 100
+            fps_processed = processed / elapsed if elapsed > 0 else 0.0
+            remaining_frames = max(total_frames - processed, 0)
+            eta_seconds = remaining_frames / fps_processed if fps_processed > 0 else float("inf")
+            message = (
+                f"Processed {processed}/{total_frames} frames "
+                f"({percent:5.1f}%) | ETA {_format_duration(eta_seconds)}"
+            )
+        else:
+            message = f"Processed {processed} frames | elapsed {_format_duration(elapsed)}"
+
+        if final:
+            print(message + " " * 20)
+        else:
+            print(message, end="\r", flush=True)
+
+        last_report_time = now
+        progress_reported = True
 
     try:
         while True:
@@ -194,6 +242,7 @@ def analyze_videos(
 
             if frame_index % frame_stride != 0:
                 frame_index += 1
+                report_progress(frame_index)
                 continue
 
             frame_a, frame_b = _ensure_matching_dimensions(frame_a, frame_b)
@@ -238,6 +287,7 @@ def analyze_videos(
                 current_best_frames = None
 
             frame_index += 1
+            report_progress(frame_index)
 
         if current_start is not None and current_best_frames is not None:
             end_frame = frame_index - 1
@@ -262,6 +312,9 @@ def analyze_videos(
     finally:
         cap_a.release()
         cap_b.release()
+        report_progress(frame_index, final=True)
+        if progress_reported:
+            print()  # Ensure subsequent output starts on a new line.
 
     metadata = AnalysisMetadata(
         fps=fps,
