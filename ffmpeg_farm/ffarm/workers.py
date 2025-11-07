@@ -89,3 +89,13 @@ def stop_worker(worker_id: str, *, force: bool = False) -> Worker | None:
 
 def resume_worker(worker_id: str) -> Worker | None:
     return update_worker_state(worker_id, status=WorkerStatus.ONLINE, accept_leases=True)
+
+
+def delete_offline_workers() -> int:
+    with session_scope() as session:
+        offline_workers = session.exec(select(Worker).where(Worker.status == WorkerStatus.OFFLINE)).all()
+        count = len(offline_workers)
+        for worker in offline_workers:
+            session.delete(worker)
+        session.commit()
+        return count

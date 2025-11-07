@@ -14,6 +14,8 @@ PROFILES: dict[str, list[str]] = {
         "-loglevel",
         "error",
         "-y",
+        "-progress",
+        "pipe:1",
         "-i",
         "{input}",
         "-vf",

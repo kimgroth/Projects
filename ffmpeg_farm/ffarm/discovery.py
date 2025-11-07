@@ -37,7 +37,12 @@ class WorkerServiceListener(ServiceListener):
         pass
 
     def _sync_worker(self, info: ServiceInfo) -> None:
-        properties = {k.decode(): v.decode() for k, v in (info.properties or {}).items()}
+        def _decode(value: bytes | None) -> str:
+            if value is None:
+                return ""
+            return value.decode(errors="ignore")
+
+        properties = {k.decode(errors="ignore"): _decode(v) for k, v in (info.properties or {}).items()}
         worker_id = properties.get("id") or info.name.split(".")[0]
         name = properties.get("name") or worker_id
         base_url = properties.get("base_url") or self._build_base_url(info)

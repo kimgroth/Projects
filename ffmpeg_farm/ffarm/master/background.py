@@ -11,6 +11,7 @@ from sqlmodel import select
 
 from ..config import HEARTBEAT_TIMEOUT_SECONDS, LEASE_DURATION_SECONDS
 from ..db import session_scope
+from ..jobs import release_jobs_for_worker
 from ..models import Job, JobState, Worker, WorkerStatus
 
 
@@ -54,6 +55,7 @@ def mark_offline_workers():
     if HEARTBEAT_TIMEOUT_SECONDS <= 0:
         return
     threshold = datetime.utcnow() - timedelta(seconds=HEARTBEAT_TIMEOUT_SECONDS)
+    released_workers: list[str] = []
     with session_scope() as session:
         stale_workers = session.exec(
             select(Worker).where(
@@ -65,5 +67,9 @@ def mark_offline_workers():
         for worker in stale_workers:
             worker.status = WorkerStatus.OFFLINE
             worker.accept_leases = False
+            worker.running_job_id = None
             session.add(worker)
+            released_workers.append(worker.id)
         session.commit()
+    for worker_id in released_workers:
+        release_jobs_for_worker(worker_id)

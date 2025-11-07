@@ -63,6 +63,9 @@ class ActiveJob:
     profile: str
     ffmpeg_args: list[str]
 
+COMMON_FFMPEG_PATHS = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
+COMMON_FFPROBE_PATHS = ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe", "/usr/bin/ffprobe"]
+
 
 class WorkerClient:
     def __init__(
@@ -90,13 +93,16 @@ class WorkerClient:
         self._status = WorkerStatus.ONLINE
         self._accept_leases = True
         self._heartbeat_interval = 10.0
-        self._ffmpeg_bin = self._resolve_tool("FFARM_FFMPEG", "ffmpeg")
-        self._ffprobe_bin = self._resolve_tool("FFARM_FFPROBE", "ffprobe")
+        self._heartbeat_thread: threading.Thread | None = None
+        self._active_process: Optional[subprocess.Popen[str]] = None
+        self._ffmpeg_bin = self._resolve_tool("FFARM_FFMPEG", "ffmpeg", COMMON_FFMPEG_PATHS)
+        self._ffprobe_bin = self._resolve_tool("FFARM_FFPROBE", "ffprobe", COMMON_FFPROBE_PATHS)
 
     def run(self):
         try:
             if self.advertise:
                 self._start_advertising()
+            self._start_heartbeat()
             self._loop()
         finally:
             self._cleanup()
@@ -104,19 +110,16 @@ class WorkerClient:
     def stop(self):
         self._stop_event.set()
         self._force_stop_event.set()
+        self._terminate_active_process()
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            self._heartbeat_thread.join(timeout=2.0)
 
     def _loop(self):
-        next_heartbeat = 0.0
         while not self._stop_event.is_set():
-            now = time.time()
-            if now >= next_heartbeat:
-                self._send_heartbeat()
-                next_heartbeat = now + self._heartbeat_interval
             if self._current_job is None and self._accept_leases and not self._force_stop_event.is_set():
                 lease = self._request_job()
                 if lease:
                     self._execute_job(lease)
-                    next_heartbeat = 0.0  # trigger immediate heartbeat
                     continue
             time.sleep(WORKER_POLL_INTERVAL)
 
@@ -194,7 +197,7 @@ class WorkerClient:
         duration = self._probe_duration(job.input_path)
         progress = 0.0
 
-        ffmpeg_bin = self._ffmpeg_bin or self._resolve_tool("FFARM_FFMPEG", "ffmpeg")
+        ffmpeg_bin = self._ffmpeg_bin or self._resolve_tool("FFARM_FFMPEG", "ffmpeg", COMMON_FFMPEG_PATHS)
         if not ffmpeg_bin:
             log.error("FFmpeg executable not found; set FFARM_FFMPEG or add ffmpeg to PATH")
             self._send_completion(job.job_id, False, return_code=-1)
@@ -224,12 +227,24 @@ class WorkerClient:
             self._current_job = None
             return
 
-        stdout_thread = threading.Thread(
-            target=self._stream_reader,
-            args=(process.stdout, self._last_stdout, True),
+        self._active_process = process
+        force_thread = threading.Thread(
+            target=self._watch_force_stop,
+            args=(process,),
             daemon=True,
+            name="ffarm-force-stop",
         )
-        stdout_thread.start()
+        force_thread.start()
+
+        progress_thread = None
+        if process.stdout:
+            progress_thread = threading.Thread(
+                target=self._progress_reader,
+                args=(process.stdout, job.job_id, duration),
+                daemon=True,
+                name="ffarm-progress",
+            )
+            progress_thread.start()
         self._send_progress(job.job_id, progress)
 
         try:
@@ -252,6 +267,9 @@ class WorkerClient:
                 process.stderr.close()
 
         return_code = process.wait()
+        if progress_thread and progress_thread.is_alive():
+            progress_thread.join(timeout=0.5)
+        self._active_process = None
         success = return_code == 0 and not self._force_stop_event.is_set()
         if self._force_stop_event.is_set() and return_code != 0:
             success = False
@@ -288,21 +306,84 @@ class WorkerClient:
         except httpx.RequestError:
             log.exception("Failed to send completion report")
 
-    def _stream_reader(self, stream, target: deque[str], close: bool):
+    def _progress_reader(self, stream, job_id: int, duration: Optional[float]):
         if stream is None:
             return
         try:
-            for line in iter(stream.readline, ""):
-                line = line.rstrip()
+            for raw_line in iter(stream.readline, ""):
+                line = raw_line.strip()
                 if not line:
                     continue
-                target.append(line)
+                self._last_stdout.append(line)
+                if "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                if key == "out_time_ms":
+                    try:
+                        seconds = int(value) / 1_000_000.0
+                    except (TypeError, ValueError):
+                        continue
+                    if duration:
+                        progress = min(0.999, seconds / duration)
+                        self._send_progress(job_id, progress)
+                elif key == "out_time":
+                    seconds = self._parse_timestamp(value)
+                    if seconds is not None and duration:
+                        progress = min(0.999, seconds / duration)
+                        self._send_progress(job_id, progress)
+                elif key == "progress" and value == "end":
+                    self._send_progress(job_id, 1.0)
         finally:
-            if close:
+            try:
                 stream.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    @staticmethod
+    def _parse_timestamp(value: str | None) -> Optional[float]:
+        if not value:
+            return None
+        parts = value.split(":")
+        if len(parts) != 3:
+            return None
+        try:
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            seconds = float(parts[2])
+        except ValueError:
+            return None
+        return hours * 3600 + minutes * 60 + seconds
+
+    def _watch_force_stop(self, process: subprocess.Popen[str]):
+        while process.poll() is None and not self._stop_event.is_set():
+            if self._force_stop_event.wait(0.5):
+                self._terminate_process(process)
+                return
+
+    def _terminate_active_process(self):
+        process = self._active_process
+        if process is None:
+            return
+        self._terminate_process(process)
+
+    @staticmethod
+    def _terminate_process(process: subprocess.Popen[str]):
+        if process.poll() is not None:
+            return
+        try:
+            process.terminate()
+        except OSError:
+            return
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                process.kill()
+            except OSError:
+                pass
 
     def _probe_duration(self, input_path: str) -> Optional[float]:
-        ffprobe_bin = self._ffprobe_bin or self._resolve_tool("FFARM_FFPROBE", "ffprobe")
+        ffprobe_bin = self._ffprobe_bin or self._resolve_tool("FFARM_FFPROBE", "ffprobe", COMMON_FFPROBE_PATHS)
         if not ffprobe_bin:
             log.warning("FFprobe executable not found; duration tracking disabled")
             return None
@@ -334,6 +415,7 @@ class WorkerClient:
         self._zeroconf.register_service(info)
 
     def _cleanup(self):
+        self._terminate_active_process()
         if self.client:
             self.client.close()
         if self._zeroconf and self._service_info:
@@ -343,9 +425,12 @@ class WorkerClient:
                 pass
             finally:
                 self._zeroconf.close()
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            self._stop_event.set()
+            self._heartbeat_thread.join(timeout=2.0)
 
     @staticmethod
-    def _resolve_tool(env_var: str, executable: str) -> Optional[str]:
+    def _resolve_tool(env_var: str, executable: str, fallbacks: list[str] | tuple[str, ...] = ()) -> Optional[str]:
         override = os.environ.get(env_var)
         if override:
             if os.path.isabs(override) and os.access(override, os.X_OK):
@@ -355,6 +440,22 @@ class WorkerClient:
                 return resolved
             log.warning("%s=%s is not executable", env_var, override)
         resolved = shutil.which(executable)
-        if not resolved:
-            log.warning("Executable '%s' not found on PATH", executable)
-        return resolved
+        if resolved:
+            return resolved
+        for candidate in fallbacks:
+            if candidate and os.path.isabs(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+        log.warning("Executable '%s' not found on PATH (checked %s)", executable, ", ".join(fallbacks))
+        return None
+
+    def _start_heartbeat(self):
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            return
+        self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True, name="ffarm-heartbeat")
+        self._heartbeat_thread.start()
+
+    def _heartbeat_loop(self):
+        # Send an immediate heartbeat so master sees us right away.
+        self._send_heartbeat()
+        while not self._stop_event.wait(self._heartbeat_interval):
+            self._send_heartbeat()

@@ -5,6 +5,7 @@ Tkinter GUI for the master node.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -15,10 +16,10 @@ from sqlmodel import select
 from ..config import APP_NAME, GUI_REFRESH_INTERVAL_MS
 from ..db import session_scope
 from ..discovery import WorkerDiscovery
-from ..jobs import delete_succeeded_jobs, enqueue_folder, reset_failed_jobs
-from ..models import Job, Worker, WorkerStatus
+from ..jobs import delete_all_jobs, delete_jobs, delete_succeeded_jobs, enqueue_folder, reset_failed_jobs
+from ..models import Job, JobState, Worker, WorkerStatus
 from ..state import state as master_state
-from ..workers import list_workers, resume_worker, stop_worker
+from ..workers import delete_offline_workers, list_workers, resume_worker, stop_worker
 from ..worker import WorkerClient
 from .server import MasterServer
 
@@ -37,6 +38,8 @@ class MasterGUI:
 
         self.run_local_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="Idle")
+        self.pending_var = tk.StringVar(value="Pending: 0")
+        self.failed_var = tk.StringVar(value="Failed: 0")
 
         self.jobs_tree = None
         self.workers_tree = None
@@ -68,6 +71,10 @@ class MasterGUI:
 
         self.status_label = ttk.Label(control_frame, textvariable=self.status_var)
         self.status_label.pack(side=tk.LEFT, padx=10)
+        self.pending_label = ttk.Label(control_frame, textvariable=self.pending_var)
+        self.pending_label.pack(side=tk.LEFT, padx=5)
+        self.failed_label = ttk.Label(control_frame, textvariable=self.failed_var)
+        self.failed_label.pack(side=tk.LEFT, padx=5)
 
         workers_frame = ttk.Labelframe(self.root, text="Workers", padding=10)
         workers_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
@@ -98,13 +105,17 @@ class MasterGUI:
         hard_button.pack(fill=tk.X, pady=2)
         resume_button = ttk.Button(worker_button_frame, text="Resume", command=self.resume_worker)
         resume_button.pack(fill=tk.X, pady=2)
+        clear_offline_button = ttk.Button(
+            worker_button_frame, text="Clear Offline", command=self.clear_offline_workers
+        )
+        clear_offline_button.pack(fill=tk.X, pady=2)
 
         jobs_frame = ttk.Labelframe(self.root, text="Jobs", padding=10)
         jobs_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
         self.jobs_tree = ttk.Treeview(
             jobs_frame,
-            columns=("input", "state", "progress", "worker", "attempts"),
+            columns=("input", "state", "progress", "fps", "worker", "attempts"),
             show="headings",
             height=10,
         )
@@ -112,6 +123,7 @@ class MasterGUI:
             ("input", "Input", 280),
             ("state", "State", 80),
             ("progress", "Progress", 80),
+            ("fps", "FPS", 70),
             ("worker", "Worker", 120),
             ("attempts", "Attempts", 70),
         ]:
@@ -127,6 +139,14 @@ class MasterGUI:
 
         clear_button = ttk.Button(jobs_button_frame, text="Clear Succeeded", command=self.clear_succeeded)
         clear_button.pack(side=tk.LEFT, padx=5)
+
+        clear_all_button = ttk.Button(jobs_button_frame, text="Clear All Jobs", command=self.clear_all_jobs)
+        clear_all_button.pack(side=tk.LEFT)
+
+        clear_selected_button = ttk.Button(
+            jobs_button_frame, text="Clear Selected", command=self.clear_selected_jobs
+        )
+        clear_selected_button.pack(side=tk.LEFT, padx=5)
 
     def start(self):
         self.server.start()
@@ -159,8 +179,9 @@ class MasterGUI:
         self.status_var.set("Queue resumed")
 
     def _refresh_workers(self):
-        for item in self.workers_tree.get_children():
-            self.workers_tree.delete(item)
+        selected = set(self.workers_tree.selection())
+        focused = self.workers_tree.focus()
+        self.workers_tree.delete(*self.workers_tree.get_children())
         for worker in list_workers():
             job_display = worker.running_job_id or "-"
             self.workers_tree.insert(
@@ -175,13 +196,30 @@ class MasterGUI:
                     worker.last_seen.isoformat() if worker.last_seen else "-",
                 ),
             )
+        for worker_id in selected:
+            if self.workers_tree.exists(worker_id):
+                self.workers_tree.selection_add(worker_id)
+        if focused and self.workers_tree.exists(focused):
+            self.workers_tree.focus(focused)
 
     def _refresh_jobs(self):
-        for item in self.jobs_tree.get_children():
-            self.jobs_tree.delete(item)
+        selected = set(self.jobs_tree.selection())
+        focused = self.jobs_tree.focus()
+        self.jobs_tree.delete(*self.jobs_tree.get_children())
         with session_scope() as session:
             jobs = session.exec(select(Job).order_by(Job.created_at)).all()
+        worker_names = {worker.id: worker.name for worker in list_workers()}
+        pending = 0
+        failed = 0
         for job in jobs:
+            if job.state == JobState.PENDING:
+                pending += 1
+            elif job.state == JobState.FAILED:
+                failed += 1
+            fps_display = self._format_fps(job.stdout_tail)
+            worker_display = "-"
+            if job.worker_id:
+                worker_display = worker_names.get(job.worker_id, job.worker_id)
             self.jobs_tree.insert(
                 "",
                 tk.END,
@@ -190,10 +228,31 @@ class MasterGUI:
                     Path(job.input_path).name,
                     job.state,
                     f"{job.progress * 100:.1f}%",
-                    job.worker_id or "-",
+                    fps_display,
+                    worker_display,
                     job.attempts,
                 ),
             )
+        for job_id in selected:
+            if self.jobs_tree.exists(job_id):
+                self.jobs_tree.selection_add(job_id)
+        if focused and self.jobs_tree.exists(focused):
+            self.jobs_tree.focus(focused)
+        self.pending_var.set(f"Pending: {pending}")
+        self.failed_var.set(f"Failed: {failed}")
+
+    @staticmethod
+    def _format_fps(stdout_tail: str | None) -> str:
+        if not stdout_tail:
+            return "-"
+        matches = re.findall(r"fps=([0-9]+(?:\.[0-9]+)?)", stdout_tail)
+        if not matches:
+            return "-"
+        try:
+            value = float(matches[-1])
+        except ValueError:
+            return "-"
+        return f"{value:.1f}"
 
     def soft_stop_worker(self):
         worker_id = self._selected_worker_id()
@@ -215,14 +274,50 @@ class MasterGUI:
             messagebox.showinfo("Workers", "Select a worker first.")
             return
         resume_worker(worker_id)
+        self.refresh()
 
     def retry_failed(self):
         count = reset_failed_jobs()
         self.status_var.set(f"Queued {count} failed jobs for retry")
+        self.refresh()
 
     def clear_succeeded(self):
         count = delete_succeeded_jobs()
         self.status_var.set(f"Cleared {count} succeeded jobs")
+        self.refresh()
+
+    def clear_all_jobs(self):
+        confirm = messagebox.askyesno("Confirm", "Are you sure??")
+        if not confirm:
+            return
+        count = delete_all_jobs()
+        self.status_var.set(f"Deleted {count} jobs")
+        self.refresh()
+
+    def clear_selected_jobs(self):
+        selection = self.jobs_tree.selection()
+        if not selection:
+            messagebox.showinfo("Jobs", "Select at least one job.")
+            return
+        job_ids = []
+        for item in selection:
+            try:
+                job_ids.append(int(item))
+            except ValueError:
+                continue
+        if not job_ids:
+            return
+        confirm = messagebox.askyesno("Confirm", f"Remove {len(job_ids)} selected job(s)?")
+        if not confirm:
+            return
+        count = delete_jobs(job_ids)
+        self.status_var.set(f"Deleted {count} selected jobs")
+        self.refresh()
+
+    def clear_offline_workers(self):
+        count = delete_offline_workers()
+        self.status_var.set(f"Removed {count} offline workers")
+        self.refresh()
 
     def _selected_worker_id(self) -> str | None:
         selection = self.workers_tree.selection()

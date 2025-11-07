@@ -182,3 +182,53 @@ def delete_succeeded_jobs() -> int:
             session.delete(job)
         session.commit()
         return count
+
+
+def delete_all_jobs() -> int:
+    with session_scope() as session:
+        jobs = session.exec(select(Job)).all()
+        count = len(jobs)
+        for job in jobs:
+            session.delete(job)
+        session.commit()
+        return count
+
+
+def delete_jobs(job_ids: list[int]) -> int:
+    if not job_ids:
+        return 0
+    with session_scope() as session:
+        jobs = session.exec(select(Job).where(Job.id.in_(job_ids))).all()
+        for job in jobs:
+            session.delete(job)
+        session.commit()
+        return len(jobs)
+
+
+def release_jobs_for_worker(worker_id: str) -> int:
+    """
+    Return any leased or running jobs assigned to the given worker back to the queue.
+    """
+    with session_scope() as session:
+        jobs = session.exec(
+            select(Job).where(
+                Job.worker_id == worker_id,
+                Job.state.in_([JobState.LEASED, JobState.RUNNING]),
+            )
+        ).all()
+        if not jobs:
+            return 0
+        for job in jobs:
+            job.state = JobState.PENDING
+            job.worker_id = None
+            job.lease_until = None
+            job.progress = 0.0
+            job.started_at = None
+            job.finished_at = None
+            job.return_code = None
+            job.stderr_tail = None
+            job.stdout_tail = None
+            job.error_message = None
+            session.add(job)
+        session.commit()
+        return len(jobs)

@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, HTTPException
 from sqlmodel import select
 
-from ..jobs import complete_job, lease_next_job, update_lease
+from ..jobs import complete_job, delete_all_jobs, lease_next_job, update_lease
 from ..models import (
     CompletionReport,
     HeartbeatRequest,
@@ -24,7 +24,14 @@ from ..models import (
 )
 from ..profiles import build_profile_command
 from ..state import state as master_state
-from ..workers import list_workers, resume_worker, stop_worker, upsert_worker, update_worker_state
+from ..workers import (
+    delete_offline_workers,
+    list_workers,
+    resume_worker,
+    stop_worker,
+    upsert_worker,
+    update_worker_state,
+)
 from ..db import session_scope
 
 
@@ -82,6 +89,11 @@ def create_app() -> FastAPI:
         update_worker_state(report.worker_id, running_job_id=None, status=WorkerStatus.ONLINE)
         return {"status": "ok"}
 
+    @router.post("/jobs/clear-all")
+    async def clear_all_jobs():
+        count = delete_all_jobs()
+        return {"deleted": count}
+
     @router.get("/jobs")
     async def list_jobs():
         with session_scope() as session:
@@ -125,6 +137,11 @@ def create_app() -> FastAPI:
         if worker is None:
             raise HTTPException(status_code=404, detail="Worker not found")
         return worker
+
+    @router.post("/workers/clear_offline")
+    async def clear_offline_workers():
+        count = delete_offline_workers()
+        return {"deleted": count}
 
     app.include_router(router)
     return app
