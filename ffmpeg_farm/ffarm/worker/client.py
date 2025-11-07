@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import socket
 import subprocess
 import threading
@@ -28,8 +29,7 @@ log = logging.getLogger(__name__)
 
 
 PROGRESS_PATTERN = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
-FFPROBE_CMD = [
-    "ffprobe",
+FFPROBE_ARGS = [
     "-v",
     "error",
     "-show_entries",
@@ -90,6 +90,8 @@ class WorkerClient:
         self._status = WorkerStatus.ONLINE
         self._accept_leases = True
         self._heartbeat_interval = 10.0
+        self._ffmpeg_bin = self._resolve_tool("FFARM_FFMPEG", "ffmpeg")
+        self._ffprobe_bin = self._resolve_tool("FFARM_FFPROBE", "ffprobe")
 
     def run(self):
         try:
@@ -192,7 +194,14 @@ class WorkerClient:
         duration = self._probe_duration(job.input_path)
         progress = 0.0
 
-        ffmpeg_args = list(job.ffmpeg_args)
+        ffmpeg_bin = self._ffmpeg_bin or self._resolve_tool("FFARM_FFMPEG", "ffmpeg")
+        if not ffmpeg_bin:
+            log.error("FFmpeg executable not found; set FFARM_FFMPEG or add ffmpeg to PATH")
+            self._send_completion(job.job_id, False, return_code=-1)
+            self._current_job = None
+            return
+
+        ffmpeg_args = [ffmpeg_bin] + list(job.ffmpeg_args)
         Path(job.output_path).parent.mkdir(parents=True, exist_ok=True)
         log.info("Starting job %s", job.job_id)
 
@@ -293,7 +302,11 @@ class WorkerClient:
                 stream.close()
 
     def _probe_duration(self, input_path: str) -> Optional[float]:
-        cmd = FFPROBE_CMD + [input_path]
+        ffprobe_bin = self._ffprobe_bin or self._resolve_tool("FFARM_FFPROBE", "ffprobe")
+        if not ffprobe_bin:
+            log.warning("FFprobe executable not found; duration tracking disabled")
+            return None
+        cmd = [ffprobe_bin] + FFPROBE_ARGS + [input_path]
         try:
             result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             duration_str = result.stdout.strip()
@@ -330,3 +343,18 @@ class WorkerClient:
                 pass
             finally:
                 self._zeroconf.close()
+
+    @staticmethod
+    def _resolve_tool(env_var: str, executable: str) -> Optional[str]:
+        override = os.environ.get(env_var)
+        if override:
+            if os.path.isabs(override) and os.access(override, os.X_OK):
+                return override
+            resolved = shutil.which(override)
+            if resolved:
+                return resolved
+            log.warning("%s=%s is not executable", env_var, override)
+        resolved = shutil.which(executable)
+        if not resolved:
+            log.warning("Executable '%s' not found on PATH", executable)
+        return resolved
