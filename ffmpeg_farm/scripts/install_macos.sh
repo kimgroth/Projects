@@ -102,7 +102,12 @@ if [ ! -d "$VENV_DIR" ]; then
   "$PYTHON_BIN" -m venv "$VENV_DIR"
 fi
 
-source "$VENV_DIR/bin/activate"
+VENV_PYTHON="$VENV_DIR/bin/python"
+if [ ! -x "$VENV_PYTHON" ]; then
+  echo "[ffarm] ERROR: Virtualenv Python not found at $VENV_PYTHON."
+  exit 1
+fi
+
 PYTHON_SITE_DIR="$VENV_DIR/lib/python$PY_VERSION/site-packages"
 
 if [ -d "$PYTHON_SITE_DIR" ] && [ -d "$TK_SITE" ]; then
@@ -115,10 +120,10 @@ if [ -d "$PYTHON_SITE_DIR" ] && [ -d "$TK_SITE" ]; then
   } > "$PTH_FILE"
 fi
 
-python -m pip install --upgrade pip
-pip install -r requirements.txt
+"$VENV_PYTHON" -m pip install --upgrade pip
+"$VENV_PYTHON" -m pip install -r requirements.txt
 
-if ! python - >/dev/null 2>&1 <<'PY'; then
+if ! "$VENV_PYTHON" - >/dev/null 2>&1 <<'PY'; then
 import tkinter  # noqa: F401
 PY
   echo "[ffarm] ERROR: Tkinter is still unavailable in this environment."

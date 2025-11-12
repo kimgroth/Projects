@@ -13,11 +13,11 @@ Distributed FFmpeg transcoding across machines on the same network. The master n
 ## Quick Start
 
 ```bash
-python -m ffarm master            # start the master GUI (runs on port 8000)
-python -m ffarm worker --master http://MASTER_HOST:8000
+python -m ffarm master             # start the master GUI (runs on port 8000)
+python -m ffarm worker             # workers auto-discover the master via mDNS
 ```
 
-Both commands require the Python environment described below. FFmpeg must be reachable on the system `PATH`.
+Set `FFARM_MASTER_URL=http://HOST:PORT` or pass `--master` if discovery is unavailable on your network (e.g., different subnets). Both commands require the Python environment described below. FFmpeg must be reachable on the system `PATH`.
 
 ## Installation Scripts
 

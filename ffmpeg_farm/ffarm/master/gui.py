@@ -16,6 +16,7 @@ from sqlmodel import select
 from ..config import APP_NAME, GUI_REFRESH_INTERVAL_MS
 from ..db import session_scope
 from ..discovery import WorkerDiscovery
+from ..master_discovery import MasterAdvertiser
 from ..jobs import delete_all_jobs, delete_jobs, delete_succeeded_jobs, enqueue_folder, reset_failed_jobs
 from ..models import Job, JobState, Worker, WorkerStatus
 from ..state import state as master_state
@@ -32,6 +33,7 @@ class MasterGUI:
         self.port = port
         self.server = MasterServer(host=self.host, port=self.port)
         self.discovery = WorkerDiscovery()
+        self.advertiser = MasterAdvertiser(host=self.host, port=self.port)
         self.root = tk.Tk()
         self.root.title(APP_NAME)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -151,6 +153,7 @@ class MasterGUI:
     def start(self):
         self.server.start()
         self.discovery.start()
+        self.advertiser.start()
         self.refresh()
         self.root.mainloop()
 
@@ -350,5 +353,6 @@ class MasterGUI:
         if self.local_worker_thread:
             self.local_worker_thread.join(timeout=1.0)
         self.discovery.stop()
+        self.advertiser.stop()
         self.server.stop()
         self.root.destroy()

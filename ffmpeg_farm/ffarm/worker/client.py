@@ -22,6 +22,7 @@ import httpx
 from zeroconf import ServiceInfo, Zeroconf
 
 from ..config import SERVICE_TYPE, WORKER_POLL_INTERVAL
+from ..master_discovery import discover_master
 from ..models import CompletionReport, LeaseResponse, WorkerStatus
 from ..profiles import build_profile_command
 
@@ -70,13 +71,13 @@ COMMON_FFPROBE_PATHS = ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe", "
 class WorkerClient:
     def __init__(
         self,
-        master_url: str,
+        master_url: Optional[str] = None,
         *,
         worker_id: Optional[str] = None,
         name: Optional[str] = None,
         advertise: bool = True,
     ):
-        self.master_url = master_url.rstrip("/")
+        self.master_url = self._resolve_master(master_url)
         self.worker_id = worker_id or str(uuid.uuid4())
         self.name = name or f"Worker-{socket.gethostname()}"
         self.advertise = advertise
@@ -97,6 +98,22 @@ class WorkerClient:
         self._active_process: Optional[subprocess.Popen[str]] = None
         self._ffmpeg_bin = self._resolve_tool("FFARM_FFMPEG", "ffmpeg", COMMON_FFMPEG_PATHS)
         self._ffprobe_bin = self._resolve_tool("FFARM_FFPROBE", "ffprobe", COMMON_FFPROBE_PATHS)
+
+    def _resolve_master(self, override: Optional[str]) -> str:
+        candidates = [
+            override,
+            os.environ.get("FFARM_MASTER_URL"),
+        ]
+        for candidate in candidates:
+            if candidate:
+                return candidate.rstrip("/")
+        discovered = discover_master()
+        if discovered:
+            return discovered.rstrip("/")
+        raise RuntimeError(
+            "Unable to locate master server automatically. "
+            "Set FFARM_MASTER_URL or provide --master."
+        )
 
     def run(self):
         try:
