@@ -33,6 +33,29 @@ eval "$("$BREW_BIN" shellenv)"
 
 "$BREW_BIN" update
 
+find_homebrew_python() {
+  local formulas=("$@")
+  for formula in "${formulas[@]}"; do
+    local prefix
+    prefix="$("$BREW_BIN" --prefix "$formula" 2>/dev/null || true)"
+    if [ -z "$prefix" ]; then
+      continue
+    fi
+    local candidates=(
+      "$prefix/bin/python3"
+      "$prefix/bin/python3."*
+    )
+    for candidate in "${candidates[@]}"; do
+      if [ -x "$candidate" ]; then
+        PYTHON_PREFIX="$prefix"
+        PYTHON_BIN="$candidate"
+        return 0
+      fi
+    done
+  done
+  return 1
+}
+
 if ! command -v ffmpeg >/dev/null 2>&1; then
   echo "[ffarm] Installing FFmpeg..."
   "$BREW_BIN" install ffmpeg
@@ -43,13 +66,21 @@ if ! "$BREW_BIN" ls --versions python@3 >/dev/null 2>&1; then
   "$BREW_BIN" install python@3
 fi
 
-PYTHON_PREFIX="$("$BREW_BIN" --prefix python@3)"
-PYTHON_BIN="$PYTHON_PREFIX/bin/python3"
+PYTHON_CANDIDATES=(
+  python@3
+  python3
+  python
+  python@3.14
+  python@3.13
+  python@3.12
+)
 
-if [ ! -x "$PYTHON_BIN" ]; then
-  echo "[ffarm] ERROR: Expected Homebrew Python at $PYTHON_BIN but it was not found."
+if ! find_homebrew_python "${PYTHON_CANDIDATES[@]}"; then
+  echo "[ffarm] ERROR: Unable to detect a functional Homebrew Python install (tried: ${PYTHON_CANDIDATES[*]})."
+  echo "[ffarm] Try running: brew install python@3"
   exit 1
 fi
+
 PY_VERSION="$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 TK_FORMULA="python-tk@${PY_VERSION}"
 TK_PREFIX=""
